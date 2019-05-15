@@ -4,7 +4,7 @@ import pickle,os,asyncio
 
 class TableOpener:
     def __init__(self):
-        self.mapfilename='mapfile.map'
+        pass
     def open(self,tpath,mode='l',primary_key=None,searchable_keys=None,all_keys=None):
         tpath=self._stadardPath(tpath)
         if mode=='l':
@@ -103,6 +103,15 @@ class Table:
         self.map.insert(pk,ib)
         writeObjectFile(obj,self._getRecordPath(pk))
         return ib
+    def _insert_(self,obj):
+        pk = getattr(obj, self.primary_key)
+        if self.map.existsPK(pk):
+            raise Exception('A record with %s = %s already exists.' % (self.primary_key, pk))
+
+        ib = InfoBody.fromObj(obj, self.searchable_keys)
+        self.map.insert(pk, ib)
+        writeObjectFile(obj, self._getRecordPath(pk))
+        return ib
     async def findAll(self,**kws):
         pks=self.map.findAll(**kws)
         return [readObjectFile(self._getRecordPath(pk)) for pk in pks]
@@ -117,6 +126,8 @@ class Table:
         return self.map.existsPK(pk)
     async def exists(self,**kws):
         return self._exists(**kws)
+    def _existsPK(self,pk):
+        return self.map.existsPK(pk)
     def _exists(self,**kws):
         '''
             Assume that only one map object is running at one time ,
@@ -157,7 +168,7 @@ class Table:
     @classmethod
     def _create_whatever(cls,tpath,primary_key,searchable_keys,keys=[]):
         if not os.path.exists(tpath):
-            os.mkdir(tpath)
+            os.makedirs(tpath)
         rpath=tpath+'/'+cls.records_dirname
         if not os.path.exists(rpath):
             os.mkdir(rpath)
@@ -226,7 +237,7 @@ class Map:
             if pk=='__dict__':
                 continue
             found=True
-            for k,v in kws:
+            for k,v in kws.items():
                 if ib.get(k)!=v:
                     found=False
                     break
@@ -270,8 +281,10 @@ class Map:
 
 class Configure(InfoBody):
     def __init__(self,primary_key,searchable_keys=[],all_keys=[]):
-        if not len(searchable_keys):
+        if not searchable_keys:
             searchable_keys=[primary_key]
+        if not primary_key in searchable_keys:
+            searchable_keys.append(primary_key)
         self.primary_key=primary_key
         self.searchable_keys=searchable_keys
         self.keys=all_keys
