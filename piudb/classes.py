@@ -5,7 +5,7 @@ import pickle,os,asyncio
 class TableOpener:
     def __init__(self):
         pass
-    def open(self,tpath,mode='l',primary_key=None,searchable_keys=None,all_keys=None):
+    def open(self,tpath,mode='l',cls=None):
         tpath=self._stadardPath(tpath)
         if mode=='l':
             if not self._exists(tpath):
@@ -16,25 +16,23 @@ class TableOpener:
                 raise Exception('A table already exists at %s'%tpath)
             elif os.path.exists(tpath) and len(os.listdir(tpath)): ## path already exists and is not empty.
                 raise Exception('''A directory already exists at %s  , and it's not empty'''%tpath)
-            return self._create(tpath,primary_key,searchable_keys,all_keys)
+            return self._create(tpath,cls=cls)
         elif mode=='a':
             if self._exists(tpath):
                 return self._load(tpath)
             elif os.path.exists(tpath) and len(os.listdir(tpath)): ## path already exists and is not empty.
                 raise Exception('''A directory already exists at %s  , and it's not empty'''%tpath)
-            return self._create(tpath,primary_key,searchable_keys,all_keys)
+            return self._create(tpath,cls=cls)
         else:
             raise Exception('Argument mode: invalid value %s'%mode)
     def _load(self,tpath):
         tb=Table(tpath)
         self._log('load table at %s'%tpath)
         return tb
-    def _create(self,tpath,primary_key,searchable_keys=[],all_keys=[]):
-        if not primary_key:
-            raise Exception('Argument primary_key cannot be None.')
-        if not searchable_keys:
-            searchable_keys=[primary_key]
-        table=Table._create_whatever(tpath,primary_key,searchable_keys,all_keys)
+    def _create(self,tpath,cls):
+        if (not cls is Model) and (not Model in cls.__bases__):
+            raise Exception('Class %s is not allowed, please use a class that has the Model class as base.'%cls.__name__)
+        table=Table._create_whatever(tpath,cls.__primary_key__,cls.__searchable_keys__,cls.__fields__)
         self._log('create table at %s successfully.'%tpath)
         return table
     def _exists(self, tpath):
@@ -45,8 +43,6 @@ class TableOpener:
         print('***** {} ==>: {}'.format(type,text))
     def _stadardPath(self,path):
         return path.strip('/').strip('\\')
-    def _formMapfilePath(self,tpath):
-        return self._stadardPath(tpath)+'/'+self.mapfilename
 
 
 
@@ -95,15 +91,16 @@ class Table:
         self.map.update(pk,**kws)
         return obj
     async def insert(self,obj):
+        obj=self._checkDefaults(obj)
         pk=getattr(obj,self.primary_key)
         if self.map.existsPK(pk):
             raise Exception('A record with %s = %s already exists.'%(self.primary_key,pk))
-
         ib=InfoBody.fromObj(obj,self.searchable_keys)
         self.map.insert(pk,ib)
         writeObjectFile(obj,self._getRecordPath(pk))
         return ib
     def _insert_(self,obj):
+        obj = self._checkDefaults(obj)
         pk = getattr(obj, self.primary_key)
         if self.map.existsPK(pk):
             raise Exception('A record with %s = %s already exists.' % (self.primary_key, pk))
@@ -115,10 +112,22 @@ class Table:
     async def findAll(self,**kws):
         pks=self.map.findAll(**kws)
         return [readObjectFile(self._getRecordPath(pk)) for pk in pks]
+
+    def _findAll_(self, **kws):
+        pks = self.map.findAll(**kws)
+        return [readObjectFile(self._getRecordPath(pk)) for pk in pks]
     async def find(self,**kws):
         pk=self.map.find(**kws)
         return readObjectFile(self._getRecordPath(pk))
+
+    def _find_(self, **kws):
+        pk = self.map.find(**kws)
+        return readObjectFile(self._getRecordPath(pk))
     async def findByPK(self,pk):
+        if self.map.existsPK(pk):
+            return readObjectFile(self._getRecordPath(pk))
+        return None
+    def _findByPK_(self,pk):
         if self.map.existsPK(pk):
             return readObjectFile(self._getRecordPath(pk))
         return None
@@ -135,7 +144,18 @@ class Table:
         '''
         self._verifySearchableKeys(kws)
         return self.map.exists(**kws)
+    def _checkRecord(self,obj):
+        assert isinstance(obj,Model)
+        return obj
+    def _checkDefaults(self,obj):
+        self._checkRecord(obj)
+        obj.checkAllDefaultValue()
+        return obj
     def _load(self):
+        '''
+        load map file and confiure file, add attibutes: primary_key,searchable_keys,keys.
+        :return:
+        '''
         self._loadMap()
         self.configure=readObjectFile(self.cpath)
         self.primary_key=self.configure.primary_key
@@ -188,10 +208,12 @@ class Table:
         return True
 
 class InfoBody(dict):
-    def __getattr__(self, key):
+    def __getattr__(self, key,default='DEFAULT'):
         try:
             return self[key]
         except KeyError as k:
+            if not default=="DEFAULT":
+                return default
             raise Exception('No attribute %s'%key)
     def __setattr__(self, key, value):
         self[key]=value
@@ -289,14 +311,113 @@ class Configure(InfoBody):
         self.searchable_keys=searchable_keys
         self.keys=all_keys
 
+##-------------------------------------------------------------------//
+
+
+
+class Field(object):
+    def __init__(self,name,column_type,primary_key,default,searchable,limit_size):
+        self.name=name
+        self.column_type=column_type
+        self.primary_key=primary_key
+        self.default=default
+        self.limit_size=limit_size
+        self.searchable=searchable
+    def __str__(self):
+        return '<%s,%s:%s>'%(self.__class__.__name__,self.column_type,self.name)
+
+class StringField(Field):
+    def __init__(self,name=None,primary_key=False,default=None,searchable=True,limit_size=None):
+        super().__init__(name,'string',primary_key,default,searchable,limit_size)
+
+class IntegerField(Field):
+    def __init__(self,name=None,primary_key=False,default=None,searchable=True,limit_size=None):
+        super().__init__(name,'integer',primary_key,default,searchable,limit_size)
+
+class FloatField(Field):
+    def __init__(self,name=None,primary_key=False,default=None,searchable=True,limit_size=None):
+        super().__init__(name,'float',primary_key,default,searchable,limit_size)
+
+class TextField(Field):
+    def __init__(self,name=None,primary_key=False,default=None,searchable=True,limit_size=None):
+        super().__init__(name,'text',primary_key,default,searchable,limit_size)
+
+class BooleanField(Field):
+    def __init__(self,name=None,primary_key=False,default=False,searchable=True,limit_size=None):
+        super().__init__(name,'booleans',primary_key,default,searchable,limit_size)
+
+class ModelMetaclass(type):
+    '''
+        fields.
+    '''
+    def __new__(cls, name,bases,attrs):
+        if name=='Model':
+            return type.__new__(cls,name,bases,attrs)
+        tableName=attrs.get('__table__',None) or name
+        print('Found model:%s (table : %s)'%(name,tableName))
+        mappings=dict()
+        fields = []
+        primaryKey = None
+        searchable_keys=[]
+        for k,v in attrs.items():
+            # 收集主键和键
+            if isinstance(v,Field):
+                print('Found mapping :%s==>%s'%(k,v))
+                v.name=k  ## in case that v has not been given a name.
+                if v.searchable:
+                    searchable_keys.append(k)
+                mappings[k]=v
+                if v.primary_key:
+                    # 找到主键
+                    if primaryKey:
+                        raise RuntimeError('Duplicate primary key for %s'%k)
+                    primaryKey=k
+                else:
+                    fields.append(k)
+        if not primaryKey:
+            raise RuntimeError('Primary key not found.')
+        for k in mappings.keys():
+            attrs.pop(k)
+        attrs['__mappings__']=mappings
+        attrs['__table__']=tableName
+        attrs['__primary_key__']=primaryKey
+        attrs['__searchable_keys__']=searchable_keys
+        attrs['__fields__']=fields
+        return type.__new__(cls,name,bases,attrs)
+
+
+class Model(InfoBody,metaclass=ModelMetaclass):
+    def getValue(self,key):
+        return getattr(self,key,None)
+    def checkAllDefaultValue(self):
+        for key in self.__fields__:
+            self.getValueOrDefault(key)
+    def getValueOrDefault(self,key):
+        value=self.__getattr__(key,None)
+        if value is None:
+            try:
+                field=self.__mappings__[key]
+            except KeyError:
+                return value
+            if field.default is not None:
+                value=field.default() if callable(field.default) else field.default
+                log(r'Set default value for %s: %s'%(field,value))
+                setattr(self,key,value)    ##仅当default 不为 None 时才将该字段设置为属性，否则不能！！！
+        return value
+
+
+
+
+
+
+
+
+##---------------------------------- Supportive functions---------------------
 
 def log(*args, num=20, str='*'):
     print(str * num, end='')
     print(*args, end='')
     print(str * num)
-
-
-##---------------------------------- Supportive functions---------------------
 def writeObjectFile(obj,fpath):
     f=open(fpath,'wb')
     pickle.dump(obj,f)
@@ -309,6 +430,9 @@ def readObjectFile(fpath):
         print(fpath)
         raise
     return obj
+
+##--------------------------------------------------------------------------------------------Test
+##--------------------------------------------------------------------------------------------Test
 def test1():
     fn='db/test_table/records/湖南人，离不开的槟榔.rcd'
     f=open(fn,'rb')
@@ -326,4 +450,4 @@ async def test2():
     [print(o.title) for o in all]
 if __name__=="__main__":
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(test2())
+    # loop.run_until_complete(test2())
