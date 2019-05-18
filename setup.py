@@ -5,7 +5,7 @@ with open("README.rst", "r") as fh:
 
 setuptools.setup(
     name="piudb",
-    version="0.0.2",
+    version="0.1.7",
     author="Wang Pei",
     author_email="1535376447@qq.com",
     description="This is a simple package, which can be used as a substitute of database.\nUnlike a database, this one doesn't store records, but store objects directly .",
